@@ -16,10 +16,40 @@ app.get("/blockchain", (req, res) => {
 });
 
 app.post("/transaction", (req, res) => {
-  const { amount, sender, recipient } = req.body;
-  const blockIndex = bitcoin.createNewTransaction(amount, sender, recipient);
+  const newTransaction = req.body;
 
-  res.json({ note: `Transaction will be added in block ${blockIndex}` });
+  const blockIndex =
+    bitcoin.addTransactionToPendingTransactions(newTransaction);
+  res.json({ note: `Transaction will be added in block${blockIndex}` });
+});
+
+app.post("/transaction/broadcast", (req, res) => {
+  const { amount, sender, recipient } = req.body;
+
+  const newTransaction = bitcoin.createNewTransaction(
+    amount,
+    sender,
+    recipient
+  );
+
+  bitcoin.addTransactionToPendingTransactions(newTransaction);
+  const networkNodes = bitcoin.networkNodes;
+
+  const requestPromise = [];
+  networkNodes.forEach((networkUrl) => {
+    const requestOption = {
+      url: networkUrl + "/transaction",
+      method: "POST",
+      body: newTransaction,
+      json: true,
+    };
+
+    requestPromise.push(rp(requestOption));
+  });
+
+  Promise.all(requestPromise).then((data) => {
+    res.send({ note: "Transaction created and broadcast successfully." });
+  });
 });
 
 app.get("/mine", (req, res) => {
@@ -38,12 +68,59 @@ app.get("/mine", (req, res) => {
   );
   const newBlock = bitcoin.createNewBlock(nonce, previousBlockHash, blockHash);
 
-  bitcoin.createNewTransaction(12.5, "00", nodeAddress);
+  const requestPromises = [];
+  bitcoin.networkNodes.forEach((networkUrl) => {
+    const requestOption = {
+      uri: networkUrl + "/receive-new-block",
+      body: { newBlock },
+      json: true,
+      method: "POST",
+    };
 
-  res.json({
-    note: "New block mine successfully",
-    block: newBlock,
+    requestPromises.push(rp(requestOption));
   });
+
+  Promise.all(requestPromises)
+    .then((data) => {
+      const requestOptions = {
+        uri: bitcoin.currentNodeUrl + "/transaction/broadcast",
+        method: "POST",
+        body: {
+          amount: 12.5,
+          sender: "00",
+          recipient: nodeAddress,
+        },
+        json: true,
+      };
+
+      return rp(requestOptions);
+    })
+    .then((data) => {
+      res.json({
+        note: "New block mine & broadcast successfully",
+        block: newBlock,
+      });
+    });
+});
+
+app.post("/receive-new-block", (req, res) => {
+  const { newBlock } = req.body;
+
+  const lastBlock = bitcoin.getLastBlock();
+  const correctHash = lastBlock.hash === newBlock.previousBlockHash;
+  const correctIndex = lastBlock["index"] + 1 === newBlock["index"];
+
+  if (correctHash && correctIndex) {
+    bitcoin.chain.push(newBlock);
+    bitcoin.pendingTransactions = [];
+
+    res.json({ note: "New block receive and accepted.", newBlock });
+  } else {
+    res.json({
+      note: "New block rejected.",
+      newBlock,
+    });
+  }
 });
 
 // register a node and broadcast it to the network
@@ -66,24 +143,24 @@ app.post("/register-and-broadcast-node", (req, res) => {
     };
 
     regNodesPromises.push(rp(requestOptions));
-
-    Promise.all(regNodesPromises)
-      .then((data) => {
-        const bulkRegisterOptions = {
-          uri: newNodeUrl + "/register-nodes-bulk",
-          method: "POST",
-          body: {
-            allNetworkNodes: [...bitcoin.networkNodes, bitcoin.currentNodeUrl],
-          },
-          json: true,
-        };
-
-        return rp(bulkRegisterOptions);
-      })
-      .then((data) => {
-        res.json({ note: "New node registered with network successfully." });
-      });
   });
+
+  Promise.all(regNodesPromises)
+    .then((data) => {
+      const bulkRegisterOptions = {
+        uri: newNodeUrl + "/register-nodes-bulk",
+        method: "POST",
+        body: {
+          allNetworkNodes: [...bitcoin.networkNodes, bitcoin.currentNodeUrl],
+        },
+        json: true,
+      };
+
+      return rp(bulkRegisterOptions);
+    })
+    .then((data) => {
+      res.json({ note: "New node registered with network successfully." });
+    });
 });
 
 // register a node with the network
