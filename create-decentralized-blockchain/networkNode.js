@@ -10,6 +10,7 @@ const port = process.argv[2];
 
 const app = express();
 app.use(express.json());
+app.use(express.static(__dirname + "/public"));
 
 app.get("/blockchain", (req, res) => {
   res.send(bitcoin);
@@ -237,6 +238,38 @@ app.get("/consensus", (req, res) => {
       });
     }
   });
+});
+
+app.get("/block/:blockHash", (req, res) => {
+  const blockHash = req.params.blockHash;
+
+  const correctBlock = bitcoin.getBlock(blockHash);
+  res.json({
+    block: correctBlock,
+  });
+});
+
+app.get("/transaction/:transactionId", (req, res) => {
+  const { transaction, correctBlock } = bitcoin.getTransaction(
+    req.params.transactionId
+  );
+
+  res.json({
+    transaction,
+    block: correctBlock,
+  });
+});
+app.get("/address/:address", (req, res) => {
+  const address = req.params.address;
+
+  const addressData = bitcoin.getAddressData(address);
+  res.json({
+    addressData,
+  });
+});
+
+app.get("/block-explorer", (req, res) => {
+  res.sendFile("./block-explorer/index.html", { root: __dirname });
 });
 
 app.listen(port, () => {
